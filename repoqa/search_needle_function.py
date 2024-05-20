@@ -30,13 +30,18 @@ INSTRUCTION = (
 )
 
 
+# Count number of tokens ignoring null byte (used for obfuscate-nl)
+def count_tokens(tokens: List[str]) -> int:
+    return len([x for x in tokens if x != "<0x00>"])
+
+
 def _backward_tokenizable_lines(lines, tokenizer, max_tokens):
     """Return the text and tokens from bottom to top"""
     text = ""
     ntokens = 0
     is_break = False
     for line in reversed(lines):
-        new_ntokens = len(tokenizer.tokenize(line + "\n"))
+        new_ntokens = count_tokens(tokenizer.tokenize(line + "\n"))
         if ntokens + new_ntokens > max_tokens:
             is_break = True
             break
@@ -51,7 +56,7 @@ def _forward_tokenizable_lines(lines, tokenizer, max_tokens):
     ntokens = 0
     is_break = False
     for line in lines:
-        new_ntokens = len(tokenizer.tokenize(line + "\n"))
+        new_ntokens = count_tokens(tokenizer.tokenize(line + "\n"))
         if ntokens + new_ntokens > max_tokens:
             is_break = True
             break
@@ -59,7 +64,7 @@ def _forward_tokenizable_lines(lines, tokenizer, max_tokens):
         ntokens += new_ntokens
     if is_break:
         text = text + "...\n"
-        ntokens += len(tokenizer.tokenize("...\n"))
+        ntokens += count_tokens(tokenizer.tokenize("...\n"))
     return text, ntokens, is_break
 
 
@@ -87,7 +92,7 @@ def make_code_context(
     ][0]
 
     needle_code = needle_file_content[needle["start_byte"] : needle["end_byte"]]
-    ntoken_needle = len(tokenizer.tokenize(needle_code))
+    ntoken_needle = count_tokens(tokenizer.tokenize(needle_code))
 
     prefix_size = int(code_context_size * position_ratio - ntoken_needle / 2)
     suffix_size = code_context_size - ntoken_needle - prefix_size
@@ -133,7 +138,13 @@ def make_code_context(
         suffix_size -= ntokens
         index += 1
 
+    # Remove all null characters from all three portions (obfuscate-nl)
+    code_prefix = code_prefix.replace("\0", "")
+    needle_code = needle_code.replace("\0", "")
+    code_suffix = code_suffix.replace("\0", "")
+
     code_context = code_prefix + needle_code + code_suffix
+
     needle_token_start = len(tokenizer.tokenize(code_prefix))
     needle_token_end = needle_token_start + len(tokenizer.tokenize(needle_code))
     code_context_ntokens = needle_token_end + len(tokenizer.tokenize(code_suffix))
@@ -166,7 +177,9 @@ def evaluate_model(
     caching: bool = True,  # if enabled, will cache the tasks which can be used to resume
     system_message: str = None,
     dataset_path: str = None,
+    ignore_comments: bool = False,
     trust_remote_code: bool = False,
+    attn_implementation=None,
 ):
     if backend is None:
         if base_url is not None:
@@ -321,7 +334,11 @@ def evaluate_model(
     elif backend == "hf":
         from repoqa.provider.hf import HfProvider
 
-        engine = HfProvider(model, trust_remote_code=trust_remote_code)
+        engine = HfProvider(
+            model,
+            trust_remote_code=trust_remote_code,
+            attn_implementation=attn_implementation,
+        )
     elif backend == "google":
         from repoqa.provider.google import GoogleProvider
 
@@ -357,7 +374,7 @@ def evaluate_model(
 
     file_base, _ = os.path.splitext(model_output_path)
     result_path = file_base + "-SCORES.json"
-    output_json = compute_score(model, dataset, model_outputs)
+    output_json = compute_score(model, dataset, model_outputs, ignore_comments)
     save_json(output_json, result_path)
 
 
